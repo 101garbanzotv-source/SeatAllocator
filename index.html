@@ -885,7 +885,9 @@
   <div class="stat"><span class="stat-label">Blocked</span><span class="stat-value" id="statBlocked">0</span></div>
   <div class="stat"><span class="stat-label">Available</span><span class="stat-value" id="statAvailable">—</span></div>
   <div class="stat"><span class="stat-label">Groups Seated</span><span class="stat-value" id="statGroups">0</span></div>
-  <div class="stat"><span class="stat-label">Orchestra</span><span class="stat-value" id="statOrch">—</span></div>
+  <div class="stat"><span class="stat-label">Orch Left</span><span class="stat-value" id="statOrchL">—</span></div>
+  <div class="stat"><span class="stat-label">Orch Center</span><span class="stat-value" id="statOrchC">—</span></div>
+  <div class="stat"><span class="stat-label">Orch Right</span><span class="stat-value" id="statOrchR">—</span></div>
   <div class="stat"><span class="stat-label">Dress Circle</span><span class="stat-value" id="statDC">—</span></div>
   <div class="stat"><span class="stat-label">Gallery</span><span class="stat-value" id="statGal">—</span></div>
   <div class="stat"><span class="stat-label">Balcony</span><span class="stat-value" id="statBal">—</span></div>
@@ -1096,8 +1098,9 @@
 import { initializeApp }                          from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getDatabase, ref, set, onValue,
          onDisconnect, runTransaction }             from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { getAuth, signInWithEmailAndPassword,
-         signOut, onAuthStateChanged }             from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getAuth, signInWithEmailAndPassword, setPersistence,
+         browserSessionPersistence, signOut,
+         onAuthStateChanged }                      from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 // ── FIREBASE CONFIG ───────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -1127,6 +1130,8 @@ loginBtn.addEventListener('click', async () => {
   loginBtn.textContent   = 'SIGNING IN…';
   loginBtn.disabled      = true;
   try {
+    // FIX 3 — SESSION persistence: login expires when the browser tab is closed.
+    await setPersistence(auth, browserSessionPersistence);
     await signInWithEmailAndPassword(auth, loginEmail.value.trim(), loginPass.value);
   } catch (e) {
     loginError.textContent = 'Invalid email or password. Please try again.';
@@ -1142,10 +1147,71 @@ document.getElementById('loginPass').addEventListener('keydown', e => {
 
 logoutBtn.addEventListener('click', () => signOut(auth));
 
+// Track whether Firebase listeners have been registered so we don't
+// double-register them if onAuthStateChanged fires more than once.
+let listenersRegistered = false;
+
 onAuthStateChanged(auth, user => {
   if (user) {
     loginOverlay.style.display = 'none';
     logoutBtn.style.display    = 'block';
+
+    if (!listenersRegistered) {
+      listenersRegistered = true;
+
+      // FIX 2 — Subscribe to seating state ONLY after auth is confirmed.
+      // Prevents permission-denied errors from unauthenticated read attempts.
+      onValue(stateRef, (snapshot) => {
+        if (pendingWrites > 0) { pendingWrites--; return; }
+
+        const data = snapshot.val();
+        if (!data) { renderAll(); } else {
+          state.groups       = data.groups       ?? [];
+          state.seats        = data.seats        ?? {};
+          state.blockedSeats = data.blockedSeats ?? {};
+          state.nextGroupId  = data.nextGroupId  ?? 1;
+          if (!firstLoad) flashSyncBanner();
+          renderAll();
+        }
+
+        // Dismiss the loading overlay after the first Firebase response
+        if (firstLoad) {
+          firstLoad = false;
+          const overlay = document.getElementById('theaterLoading');
+          overlay.classList.add('hidden');
+          setTimeout(() => overlay.remove(), 450);
+        }
+      });
+
+      // FIX 1 — Presence setup moved here so it only writes after confirmed login.
+      // Previously ran on page load, causing permission-denied errors for
+      // unauthenticated visitors.
+      const myPresenceRef = ref(database, `presence/${SESSION_ID}`);
+      set(myPresenceRef, true);
+      onDisconnect(myPresenceRef).remove();
+
+      onValue(ref(database, 'presence'), (snap) => {
+        const count = snap.exists() ? Object.keys(snap.val()).length : 1;
+        const lbl   = document.getElementById('connLabel');
+        const dot   = document.getElementById('connDot');
+        if (dot.classList.contains('connected')) {
+          lbl.textContent = `${count} USER${count !== 1 ? 'S' : ''} ONLINE`;
+        }
+      });
+
+      // Connection state indicator — kept here for consistency.
+      onValue(ref(database, '.info/connected'), (snap) => {
+        const dot = document.getElementById('connDot');
+        const lbl = document.getElementById('connLabel');
+        if (snap.val() === true) {
+          dot.className = 'conn-dot connected';
+        } else {
+          dot.className = 'conn-dot disconnected';
+          lbl.textContent = 'OFFLINE';
+        }
+      });
+    }
+
   } else {
     loginOverlay.style.display = 'flex';
     logoutBtn.style.display    = 'none';
@@ -1459,69 +1525,8 @@ async function commitState(retries = 3) {
   }
 }
 
-// Subscribe: fires immediately with current data, then on every remote change
+// firstLoad flag — used inside onAuthStateChanged → onValue callback
 let firstLoad = true;
-onValue(stateRef, (snapshot) => {
-  if (pendingWrites > 0) { pendingWrites--; return; }  // skip echoes of our own writes
-
-  const data = snapshot.val();
-  if (!data) { renderAll(); } else {
-    state.groups       = data.groups       ?? [];
-    state.seats        = data.seats        ?? {};
-    state.blockedSeats = data.blockedSeats ?? {};
-    state.nextGroupId  = data.nextGroupId  ?? 1;
-    if (!firstLoad) flashSyncBanner();
-    renderAll();
-  }
-
-  // FIX 3 — Dismiss the loading overlay after the first response
-  if (firstLoad) {
-    firstLoad = false;
-    const overlay = document.getElementById('theaterLoading');
-    overlay.classList.add('hidden');
-    // Remove from DOM after fade so it can't block clicks
-    setTimeout(() => overlay.remove(), 450);
-  }
-});
-
-// ── ONLINE USER COUNTER ───────────────────────────────────────────────────────
-// Presence tracking: each session writes its own node and removes it on
-// disconnect. We count nodes to show how many users are online.
-// IMPORTANT: this listener only updates the text label. The connection dot
-// class is owned exclusively by the .info/connected listener below so the
-// two can never conflict.
-{
-  const myPresenceRef = ref(database, `presence/${SESSION_ID}`);
-  set(myPresenceRef, true);
-  onDisconnect(myPresenceRef).remove();
-
-  onValue(ref(database, 'presence'), (snap) => {
-    const count = snap.exists() ? Object.keys(snap.val()).length : 1;
-    const lbl   = document.getElementById('connLabel');
-    // Only update the label when we're actually connected — avoid overwriting
-    // an 'OFFLINE' label with a stale user count from a cached snapshot.
-    const dot = document.getElementById('connDot');
-    if (dot.classList.contains('connected')) {
-      lbl.textContent = `${count} USER${count !== 1 ? 'S' : ''} ONLINE`;
-    }
-  });
-}
-
-// ── CONNECTION STATE INDICATOR ────────────────────────────────────────────────
-// This is the single place that sets the dot class and controls the label
-// when offline. The presence listener above is explicitly forbidden from
-// changing dot.className so the two never race.
-onValue(ref(database, '.info/connected'), (snap) => {
-  const dot = document.getElementById('connDot');
-  const lbl = document.getElementById('connLabel');
-  if (snap.val() === true) {
-    dot.className = 'conn-dot connected';
-    // Label will be updated by the presence listener once it fires
-  } else {
-    dot.className = 'conn-dot disconnected';
-    lbl.textContent = 'OFFLINE';
-  }
-});
 
 function flashSyncBanner() {
   const b = document.getElementById('syncBanner');
@@ -1653,7 +1658,13 @@ function removeGroup(id) {
 }
 
 function resetAll() {
-  if (!confirm('Reset all seating for ALL users? This cannot be undone.')) return;
+  // FIX 4 — Require confirmed auth before allowing a full reset.
+  const user = auth.currentUser;
+  if (!user) {
+    alert('You must be signed in to reset the theater.');
+    return;
+  }
+  if (!confirm(`Reset all seating for ALL users? This cannot be undone.\n\nSigned in as: ${user.email}`)) return;
   state.groups       = [];
   state.seats        = {};
   state.blockedSeats = {};
@@ -2053,10 +2064,14 @@ function renderStats() {
   document.getElementById('statAvailable').textContent = TOTAL_CAPACITY - occupied - blocked;
   document.getElementById('statGroups').textContent    = state.groups.length;
 
-  document.getElementById('statOrch').textContent = `${TOTAL_ORCH_PART - sumAvail(['OL','OC','OR','PL','PR'])} / ${TOTAL_ORCH_PART}`;
-  document.getElementById('statDC').textContent   = `${TOTAL_DC  - sumAvail(['DCL','DCC','DCR'])} / ${TOTAL_DC}`;
-  document.getElementById('statGal').textContent  = `${TOTAL_GAL - sumAvail(['GL','GC','GR'])} / ${TOTAL_GAL}`;
-  document.getElementById('statBal').textContent  = `${TOTAL_BAL - calcAvail('BC')} / ${TOTAL_BAL}`;
+  // Per-section counts — calcAvail() subtracts both occupied AND blocked seats,
+  // so (total - calcAvail) correctly reflects all unavailable seats.
+  document.getElementById('statOrchL').textContent = `${TOT.OL - calcAvail('OL')} / ${TOT.OL}`;
+  document.getElementById('statOrchC').textContent = `${TOT.OC - calcAvail('OC')} / ${TOT.OC}`;
+  document.getElementById('statOrchR').textContent = `${TOT.OR - calcAvail('OR')} / ${TOT.OR}`;
+  document.getElementById('statDC').textContent    = `${TOTAL_DC  - sumAvail(['DCL','DCC','DCR'])} / ${TOTAL_DC}`;
+  document.getElementById('statGal').textContent   = `${TOTAL_GAL - sumAvail(['GL','GC','GR'])} / ${TOTAL_GAL}`;
+  document.getElementById('statBal').textContent   = `${TOTAL_BAL - calcAvail('BC')} / ${TOTAL_BAL}`;
 }
 
 function renderAll() {
