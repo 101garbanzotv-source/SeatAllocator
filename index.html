@@ -869,6 +869,13 @@
       <span id="connLabel">CONNECTING</span>
     </div>
     <div class="session-id" id="sessionDisplay">SESSION: —</div>
+    <button id="logoutBtn" style="
+      display:none; padding:6px 16px;
+      background:rgba(139,26,47,0.3); border:1px solid rgba(139,26,47,0.5);
+      color:#e05070; border-radius:20px; cursor:pointer;
+      font-size:11px; letter-spacing:1px; font-family:'Raleway',sans-serif;">
+      SIGN OUT
+    </button>
   </div>
 </header>
 
@@ -1089,20 +1096,63 @@
 import { initializeApp }                          from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getDatabase, ref, set, onValue,
          onDisconnect, runTransaction }             from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { getAuth, signInWithEmailAndPassword,
+         signOut, onAuthStateChanged }             from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 // ── FIREBASE CONFIG ───────────────────────────────────────────────────────────
 const firebaseConfig = {
-  apiKey:            'AIzaSyBPW2kQv4zTG8KBjmwUOBOzvjEWSh_DtSQ',
-  authDomain:        'reynolds-seating-assignments.firebaseapp.com',
-  databaseURL:       'https://reynolds-seating-assignments-default-rtdb.firebaseio.com',
-  projectId:         'reynolds-seating-assignments',
-  storageBucket:     'reynolds-seating-assignments.firebasestorage.app',
-  messagingSenderId: '25328286909',
-  appId:             '1:25328286909:web:f6079e4adf54c6d4634bd4',
+  apiKey: "AIzaSyDrxVEF-X3-atuvziolMh8L740Zr2B6sy0",
+  authDomain: "teather-ce9d9.firebaseapp.com",
+  databaseURL: "https://teather-ce9d9-default-rtdb.firebaseio.com",
+  projectId: "teather-ce9d9",
+  storageBucket: "teather-ce9d9.firebasestorage.app",
+  messagingSenderId: "572939585940",
+  appId: "1:572939585940:web:c24fb05a7e4ee9658ea781"
 };
 
 const app      = initializeApp(firebaseConfig);
 const database = getDatabase(app);
+const auth     = getAuth(app);
+
+// ── AUTH GATE ─────────────────────────────────────────────────────────────────
+const loginOverlay = document.getElementById('loginOverlay');
+const loginBtn     = document.getElementById('loginBtn');
+const loginEmail   = document.getElementById('loginEmail');
+const loginPass    = document.getElementById('loginPass');
+const loginError   = document.getElementById('loginError');
+const logoutBtn    = document.getElementById('logoutBtn');
+
+loginBtn.addEventListener('click', async () => {
+  loginError.textContent = '';
+  loginBtn.textContent   = 'SIGNING IN…';
+  loginBtn.disabled      = true;
+  try {
+    await signInWithEmailAndPassword(auth, loginEmail.value.trim(), loginPass.value);
+  } catch (e) {
+    loginError.textContent = 'Invalid email or password. Please try again.';
+    loginBtn.textContent   = 'SIGN IN';
+    loginBtn.disabled      = false;
+  }
+});
+
+// Allow pressing Enter in the password field to submit
+document.getElementById('loginPass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') loginBtn.click();
+});
+
+logoutBtn.addEventListener('click', () => signOut(auth));
+
+onAuthStateChanged(auth, user => {
+  if (user) {
+    loginOverlay.style.display = 'none';
+    logoutBtn.style.display    = 'block';
+  } else {
+    loginOverlay.style.display = 'flex';
+    logoutBtn.style.display    = 'none';
+    loginBtn.textContent       = 'SIGN IN';
+    loginBtn.disabled          = false;
+  }
+});
 
 // ── DATABASE REFS ─────────────────────────────────────────────────────────────
 const stateRef = ref(database, 'seatingState');   // the shared seating state
@@ -2373,5 +2423,63 @@ document.getElementById('frmBtnNone').addEventListener('click', () => {
 renderAll();
 
 </script>
+
+<!-- ── LOGIN OVERLAY ───────────────────────────────────────────────────────── -->
+<div id="loginOverlay" style="
+  position:fixed; inset:0; z-index:99999;
+  background:rgba(10,8,16,0.97);
+  display:flex; align-items:center; justify-content:center;
+  font-family:'Raleway',sans-serif;">
+  <div style="
+    background:#1f1a30;
+    border:1px solid rgba(201,162,39,0.4);
+    border-radius:10px; padding:40px; width:340px;
+    box-shadow:0 8px 60px rgba(0,0,0,0.8), 0 0 40px rgba(201,162,39,0.08);">
+
+    <div style="font-family:'Cinzel',serif; font-size:20px;
+      color:#c9a227; text-align:center; letter-spacing:3px; margin-bottom:4px;">
+      REYNOLDS HALL
+    </div>
+    <div style="font-size:11px; color:#a89070; text-align:center;
+      letter-spacing:3px; text-transform:uppercase; margin-bottom:32px;">
+      Staff Access Only
+    </div>
+
+    <label style="font-size:11px; letter-spacing:1px; color:#a89070;
+      text-transform:uppercase; display:block; margin-bottom:6px;">
+      Email
+    </label>
+    <input id="loginEmail" type="email" placeholder="staff@example.com"
+      style="width:100%; padding:10px 14px; margin-bottom:14px;
+      background:#0a0810; border:1px solid rgba(201,162,39,0.2);
+      color:#f0e8d0; border-radius:6px; font-size:14px;
+      font-family:'Raleway',sans-serif; box-sizing:border-box;
+      outline:none;">
+
+    <label style="font-size:11px; letter-spacing:1px; color:#a89070;
+      text-transform:uppercase; display:block; margin-bottom:6px;">
+      Password
+    </label>
+    <input id="loginPass" type="password" placeholder="••••••••"
+      style="width:100%; padding:10px 14px; margin-bottom:6px;
+      background:#0a0810; border:1px solid rgba(201,162,39,0.2);
+      color:#f0e8d0; border-radius:6px; font-size:14px;
+      font-family:'Raleway',sans-serif; box-sizing:border-box;
+      outline:none;">
+
+    <div id="loginError" style="color:#e05070; font-size:12px;
+      min-height:18px; margin-bottom:14px; letter-spacing:0.5px;"></div>
+
+    <button id="loginBtn" style="width:100%; padding:13px;
+      background:linear-gradient(135deg,#5a2d78,#7b3fa0);
+      border:1px solid rgba(201,162,39,0.4); color:#e8c44a;
+      border-radius:6px; cursor:pointer; font-family:'Cinzel',serif;
+      font-size:13px; letter-spacing:2px; text-transform:uppercase;
+      transition:all 0.2s;">
+      SIGN IN
+    </button>
+  </div>
+</div>
+
 </body>
 </html>
